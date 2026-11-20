@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<html lang="de"><head><meta charset="utf-8">
+<html lang="de" translate="no"><meta name="google" content="notranslate"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <title>Sprich mit Anna – Deutsch A1</title>
 <style>
@@ -54,13 +54,15 @@ d.querySelector('[data-a="t"]').onclick=()=>d.classList.toggle("show");
 d.querySelector('[data-a="r"]').onclick=()=>say(o.de,0.95);
 d.querySelector('[data-a="s"]').onclick=()=>say(o.de,0.55)}
 const RULES=`Du bist Anna, 28, aus Berlin, eine freundliche Deutsch-Gesprächspartnerin für einen Lerner auf Niveau A1 (Muttersprache Urdu). Regeln: Nur sehr einfaches A1-Deutsch, 1-2 kurze Sätze (max 15 Wörter), Gegenwart. Führe ein natürliches Gespräch: erzähle immer etwas kurz über dich (Name, Wohnort, Familie, Hobby, Essen, Tagesablauf, Wetter, Uhrzeit, Zahlen, Einkaufen, Arbeit) UND stelle genau eine einfache Frage an den Lerner. Wechsle die Themen regelmäßig, wiederhole dich nicht, bleib nicht bei "Wie geht es dir?". Die Nachricht des Lerners kommt oft aus einer Spracherkennung, die manchmal falsche Wörter erkennt: rate, was der Lerner auf Deutsch sagen wollte, und antworte darauf. Wenn die Nachricht Fehler hat (Grammatik, Wortwahl, Englisch/Urdu statt Deutsch), setze "fix" auf {"better":"der bessere, richtige deutsche Satz","why":"kurze Erklärung in Roman Urdu: was falsch war und was man stattdessen sagt"}; ist alles richtig, setze "fix" auf null. "tr" ist die Übersetzung deiner Antwort in Roman Urdu (lateinische Schrift). Antworte NUR als JSON: {"de":"...","tr":"...","fix":null}`;
+async function tf(u,o){const ac=new AbortController();const to=setTimeout(()=>ac.abort(),30000);try{return await fetch(u,{...o,signal:ac.signal})}catch(e){throw new Error("NET "+(e.name==="AbortError"?"timeout 30s":e.message))}finally{clearTimeout(to)}}
 async function callGemini(prompt){
   const key=store.get("gkey");if(!key)throw new Error("NOKEY");
   const list=store.get("gmodel")?[store.get("gmodel"),...MODELS]:MODELS;let err;
   for(const m of list){
-    const r=await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${m}:generateContent`,{method:"POST",headers:{"Content-Type":"application/json","x-goog-api-key":key},body:JSON.stringify({contents:[{role:"user",parts:[{text:prompt}]}],generationConfig:{responseMimeType:"application/json",temperature:0.9}})});
+    const r=await tf(`https://generativelanguage.googleapis.com/v1beta/models/${m}:generateContent`,{method:"POST",headers:{"Content-Type":"application/json","x-goog-api-key":key},body:JSON.stringify({contents:[{role:"user",parts:[{text:prompt}]}],generationConfig:{responseMimeType:"application/json",temperature:0.9}})});
     if(r.ok){const j=await r.json();const t=j.candidates&&j.candidates[0].content.parts.map(p=>p.text||"").join("");return JSON.parse(t.replace(/```json|```/g,"").trim())}
-    err=r.status+" "+m;if(r.status===400||r.status===403)throw new Error("KEY "+r.status);if(r.status===429)throw new Error("LIMIT")}
+    let bd="";try{bd=(await r.json()).error.message}catch(e){}
+    err=r.status+" "+m+" "+bd;if(r.status===400||r.status===403)throw new Error("KEY "+r.status+" "+bd);if(r.status===429)throw new Error("LIMIT "+bd)}
   throw new Error("MODEL "+err)}
 async function ask(userText){
   busy=true;const th=add("sys","Anna schreibt…");
@@ -69,22 +71,26 @@ async function ask(userText){
   try{const o=await callGemini(prompt);th.remove();hist.push({r:"a",t:o.de});
     if(o.fix&&o.fix.better&&lastMe){const f=document.createElement("div");f.className="fix";f.innerHTML=`✏️ <b>Besser:</b> ${esc(o.fix.better)}<br>${esc(o.fix.why)}`;lastMe.appendChild(f)}
     annaBubble(o);speak(o.de)}
-  catch(e){const m=String(e.message);th.innerHTML=m==="LIMIT"?"Zu viele Anfragen. Ek minute ruko, phir dobara bhejo.":m.startsWith("KEY")?"API key ghalat hai. ⚙️ mein dobara paste karo.":m==="NOKEY"?"Pehle ⚙️ mein API key daalo.":"Fehler: "+m+" (⚙️ mein model ka naam badal kar dekho)"}
+  catch(e){const m=String(e.message);th.innerHTML=(m.startsWith("LIMIT")?"Zu viele Anfragen. Ek minute ruko, phir dobara bhejo.":m.startsWith("KEY")?"API key ya location ka masla.":m==="NOKEY"?"Pehle ⚙️ mein API key daalo.":m.startsWith("NET")?"Google se connection nahi bana.":"Fehler")+"<br><small>"+esc(m)+"</small>"}
   busy=false}
-function send(t){t=(t||txt.value).trim();if(!t||busy)return;txt.value="";lastMe=add("me",`<div class="de">${esc(t)}</div>`);hist.push({r:"u",t});ask(t)}
+function send(t){t=(t||txt.value).trim();if(!t||busy)return;stopMic();txt.value="";lastMe=add("me",`<div class="de">${esc(t)}</div>`);hist.push({r:"u",t});ask(t)}
 $("go").onclick=()=>{unlock();send()};txt.onkeydown=e=>{if(e.key==="Enter"){unlock();send()}};
+let wantListen=false,base="";
+function stopMic(){wantListen=false;try{rec&&rec.stop()}catch(e){}mic.classList.remove("on")}
+function startRec(){
+  rec=new SR();rec.lang="de-DE";rec.interimResults=true;rec.continuous=true;
+  rec.onstart=()=>mic.classList.add("on");
+  rec.onresult=e=>{let f="",i="";for(let k=0;k<e.results.length;k++){const r=e.results[k];if(r.isFinal)f+=r[0].transcript+" ";else i+=r[0].transcript}txt.value=(base+" "+f+i).trim()};
+  rec.onerror=e=>{if(e.error==="not-allowed"||e.error==="service-not-allowed"){wantListen=false;alert("Mic ki ijazat do (browser settings mein).")}};
+  rec.onend=()=>{if(wantListen){base=txt.value.trim();try{startRec()}catch(e){}}else{mic.classList.remove("on");rec=null}};
+  try{rec.start()}catch(e){}}
 mic.onclick=()=>{
   if(!SR){alert("Is browser mein voice input nahi hai. Chrome ya Edge use karo, ya type karo.");return}
-  if(rec){rec.stop();return}
-  speechSynthesis.cancel();unlock();rec=new SR();rec.lang="de-DE";rec.interimResults=true;rec.continuous=false;
-  rec.onstart=()=>mic.classList.add("on");
-  rec.onresult=e=>{let s="";for(const r of e.results)s+=r[0].transcript;txt.value=s};
-  rec.onerror=e=>{if(e.error==="not-allowed")alert("Mic ki ijazat do (browser settings mein).")};
-  rec.onend=()=>{mic.classList.remove("on");rec=null;if(txt.value.trim())send()};
-  try{rec.start()}catch(e){rec=null}};
+  if(wantListen){stopMic();return}
+  speechSynthesis.cancel();unlock();wantListen=true;base=txt.value.trim();startRec()};
 function setup(){
   chat.innerHTML=`<div class="sys"><b>Einstellungen</b><br>Google Gemini ki free API key yahan paste karo (aistudio.google.com/apikey se bina card ke milti hai). Key sirf tumhare browser mein save hoti hai.<input id="k" type="password" placeholder="API key" value="${esc(store.get("gkey"))}"><input id="m" placeholder="Model (optional) z.B. gemini-2.5-flash" value="${esc(store.get("gmodel"))}"><button id="start">${started?"Speichern":"Start"}</button></div>`;
   $("start").onclick=()=>{const k=$("k").value.trim();if(!k){$("k").focus();return}store.set("gkey",k);store.set("gmodel",$("m").value.trim());unlock();if(started){chat.innerHTML="";hist.forEach(h=>h.r==="a"?annaBubble({de:h.t,tr:""}):add("me",`<div class="de">${esc(h.t)}</div>`))}else{started=true;chat.innerHTML="";ask("")}}}
 $("cfg").onclick=setup;
-if(store.get("gkey")){chat.innerHTML='<div class="sys">Mic dabao aur Deutsch mein bolo.<br><button id="start">Start</button></div>';$("start").onclick=()=>{unlock();started=true;chat.innerHTML="";ask("")}}else setup();
+if(store.get("gkey")){chat.innerHTML='<div class="sys">🎤 dabao, Deutsch mein bolo (jitna marzi ruk ruk kar). Khatam ho to 🎤 dobara dabao, phir ➤ dabao jawab bhejne ke liye.<br><button id="start">Start</button></div>';$("start").onclick=()=>{unlock();started=true;chat.innerHTML="";ask("")}}else setup();
 </script></body></html>
